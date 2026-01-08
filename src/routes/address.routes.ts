@@ -5,30 +5,28 @@ import { createAddressSchema } from "../validators/address.schema.js";
 
 const addressApp = new Hono();
 
-// Create address for user
 addressApp.post("/", async (c) => {
   try {
-    // Validate userId param
+  
     const userIdParsed = userIdParamSchema.safeParse({ userId: c.req.param("userId") });
     if (!userIdParsed.success) {
       return c.json({ error: userIdParsed.error.issues[0].message }, 400);
     }
     const { userId } = userIdParsed.data;
 
-    // Validate body
+    
     const body = await c.req.json();
     const validatedAddress = createAddressSchema.safeParse(body);
     if (!validatedAddress.success) {
       return c.json({ message: "Validation error", errors: validatedAddress.error.issues[0].message }, 400);
     }
 
-    // Check if user exists
+    
     const userCheck = await pool.query("SELECT id FROM users WHERE id = $1", [userId]);
     if (userCheck.rows.length === 0) {
       return c.json({ error: "User not found" }, 404);
     }
 
-    // Insert address
     const { address_line, city, state, postal_code, country } = validatedAddress.data;
     const result = await pool.query(
       `INSERT INTO addresses (user_id, address_line, city, state, postal_code, country)
@@ -43,7 +41,6 @@ addressApp.post("/", async (c) => {
   }
 });
 
-// Get all addresses of a user
 addressApp.get("/", async (c) => {
   try {
     const userIdParsed = userIdParamSchema.safeParse({ userId: c.req.param("userId") });
@@ -51,8 +48,6 @@ addressApp.get("/", async (c) => {
       return c.json({ error: userIdParsed.error.issues[0].message }, 400);
     }
     const { userId } = userIdParsed.data;
-
-    // Check if user exists
     const userCheck = await pool.query("SELECT id FROM users WHERE id = $1", [userId]);
     if (userCheck.rows.length === 0) {
       return c.json({ error: "User not found" }, 404);
@@ -66,7 +61,7 @@ addressApp.get("/", async (c) => {
   }
 });
 
-// Get all addresses (all users)
+
 addressApp.get("/", async (c) => {
   try {
     const result = await pool.query("SELECT * FROM addresses ORDER BY id");
@@ -77,69 +72,59 @@ addressApp.get("/", async (c) => {
   }
 });
 
-// Update an address of a user (partial updates allowed)
+
 addressApp.put("/:addressId", async (c) => {
   try {
-    // Validate params
-    const userIdParsed = userIdParamSchema.safeParse({ userId: c.req.param("userId") });
-    const addressIdParsed = addressIdParamSchema.safeParse({ addressId: c.req.param("addressId") });
+    const { userId, addressId } = {
+      userId: Number(c.req.param("userId")),
+      addressId: Number(c.req.param("addressId")),
+    };
 
-    if (!userIdParsed.success) {
-      return c.json({ error: userIdParsed.error.issues[0].message }, 400);
-    }
-    if (!addressIdParsed.success) {
-      return c.json({ error: addressIdParsed.error.issues[0].message }, 400);
-    }
+    const body = await c.req.json();
 
-    const { userId } = userIdParsed.data;
-    const { addressId } = addressIdParsed.data;
-
-    // Check if user exists
-    const userCheck = await pool.query("SELECT id FROM users WHERE id = $1", [userId]);
-    if (userCheck.rows.length === 0) {
-      return c.json({ error: "User not found" }, 404);
+    const parsed = createAddressSchema.partial().safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.issues[0].message }, 400);
     }
 
-    // Check if address belongs to user
-    const addressCheck = await pool.query(
-      "SELECT * FROM addresses WHERE id = $1 AND user_id = $2",
-      [addressId, userId]
+   
+    const result = await pool.query(
+      `UPDATE addresses
+       SET
+         address_line = COALESCE($1, address_line),
+         city         = COALESCE($2, city),
+         state        = COALESCE($3, state),
+         postal_code  = COALESCE($4, postal_code),
+         country      = COALESCE($5, country)
+       WHERE id = $6 AND user_id = $7
+       RETURNING *`,
+      [
+        parsed.data.address_line,
+        parsed.data.city,
+        parsed.data.state,
+        parsed.data.postal_code,
+        parsed.data.country,
+        addressId,
+        userId
+      ]
     );
-    if (addressCheck.rows.length === 0) {
+
+    if (result.rows.length === 0) {
       return c.json({ error: "Address not found for this user" }, 404);
     }
 
-    const body = await c.req.json();
-    const partialAddressSchema = createAddressSchema.partial();
-    const bodyParsed = partialAddressSchema.safeParse(body);
-    if (!bodyParsed.success) {
-      return c.json({ message: "Validation error", errors: bodyParsed.error.issues[0].message}, 400);
-    }
+    return c.json(result.rows[0]);
 
-    const fields = Object.keys(bodyParsed.data) as (keyof typeof bodyParsed.data)[];
-    if (fields.length === 0) {
-      return c.json({ message: "No fields provided to update" }, 400);
-    }
-
-const values = fields.map((field) => bodyParsed.data[field] as string);
-values.push(addressId.toString());  // <-- convert number to string here
-
-const setClauses = fields.map((field, index) => `${field} = $${index + 1}`).join(", ");
-const updateQuery = `UPDATE addresses SET ${setClauses} WHERE id = $${values.length} RETURNING *`;
-
-const updateResult = await pool.query(updateQuery, values);
-
-
-    return c.json(updateResult.rows[0]);
   } catch (err) {
     console.error(err);
     return c.json({ error: "Internal Server Error" }, 500);
   }
 });
-// Delete an address of a user
+
+
 addressApp.delete("/:addressId", async (c) => {
   try {
-    // Validate params
+   
     const userIdParsed = userIdParamSchema.safeParse({
       userId: c.req.param("userId"),
     });
@@ -164,7 +149,7 @@ addressApp.delete("/:addressId", async (c) => {
     const { userId } = userIdParsed.data;
     const { addressId } = addressIdParsed.data;
 
-    // Check if user exists
+   
     const userCheck = await pool.query(
       "SELECT id FROM users WHERE id = $1",
       [userId]
@@ -174,7 +159,6 @@ addressApp.delete("/:addressId", async (c) => {
       return c.json({ error: "User not found" }, 404);
     }
 
-    // Delete address only if it belongs to user
     const deleteResult = await pool.query(
       "DELETE FROM addresses WHERE id = $1 AND user_id = $2 RETURNING *",
       [addressId, userId]
@@ -196,36 +180,36 @@ addressApp.delete("/:addressId", async (c) => {
     return c.json({ error: "Internal Server Error" }, 500);
   }
 });
-addressApp.get("/users/address-count", async (c) => {
-  try {
-    const result = await pool.query(`
-      SELECT u.id, u.name, COUNT(a.id) AS address_count
-      FROM users u
-      LEFT JOIN addresses a ON u.id = a.user_id
-      GROUP BY u.id, u.name
-      ORDER BY u.name;
-    `);
-    return c.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    return c.json({ error: "Internal Server Error" }, 500);
-  }
-});
-addressApp.get("/users/no-address", async (c) => {
-  try {
-    const result = await pool.query(`
-      SELECT u.id, u.name, u.email
-      FROM users u
-      LEFT JOIN addresses a ON u.id = a.user_id
-      WHERE a.id IS NULL
-      ORDER BY u.name;
-    `);
+// addressApp.get("/users/address-count", async (c) => {
+//   try {
+//     const result = await pool.query(`
+//       SELECT u.id, u.name, COUNT(a.id) AS address_count
+//       FROM users u
+//       LEFT JOIN addresses a ON u.id = a.user_id
+//       GROUP BY u.id, u.name
+//       ORDER BY u.name;
+//     `);
+//     return c.json(result.rows);
+//   } catch (err) {
+//     console.error(err);
+//     return c.json({ error: "Internal Server Error" }, 500);
+//   }
+// });
+// addressApp.get("/users/no-address", async (c) => {
+//   try {
+//     const result = await pool.query(`
+//       SELECT u.id, u.name, u.email
+//       FROM users u
+//       LEFT JOIN addresses a ON u.id = a.user_id
+//       WHERE a.id IS NULL
+//       ORDER BY u.name;
+//     `);
 
-    return c.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    return c.json({ error: "Internal Server Error" }, 500);
-  }
-});
+//     return c.json(result.rows);
+//   } catch (err) {
+//     console.error(err);
+//     return c.json({ error: "Internal Server Error" }, 500);
+//   }
+// });
 
 export default addressApp;

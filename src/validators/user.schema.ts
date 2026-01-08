@@ -1,36 +1,36 @@
-
-import { z } from "zod"
+import { z } from "zod";
 
 export const createUserSchema = z.object({
   name: z
     .string()
     .trim()
-    .nonempty("Name is required")
-    .min(3, "Name must be at least 3 characters"),
+    .min(3, { message: "Name must be at least 3 characters" })
+    .nonempty({ message: "Name is required" }), 
 
-  email: z.email("Invalid email address"),
-  
-  
- 
-   
+  email: z
+  .string()
+  .trim()
+  .min(1, { message: "Email is required" }) 
+  .pipe(z.email({ message: "Invalid email address" })),
 
   password: z
     .string()
-    .nonempty("Password is required")
-    .min(6, "Password must be at least 6 characters")
-      .regex(/[A-Za-z]/, "Password must contain a letter")
-  .regex(/[0-9]/, "Password must contain a number")
-  .regex(/[@$!%*?&]/, "Password must contain a special character"),
-})
+    .min(6, { message: "Password must be at least 6 characters" })
+    .regex(/[A-Za-z]/, { message: "Password must contain at least one letter" })
+    .regex(/[0-9]/, { message: "Password must contain at least one number" })
+    .regex(/[@$!%*?&]/, { message: "Password must contain at least one special character (@$!%*?&)" }),
+});
+
+
 
 export const idParamSchema = z.object({
-  id: z.coerce.number().int().positive("ID must be a positive number"),
+  id: z.coerce.number().int().positive({ message: "ID must be a positive number" }),
 });
 
-/** UserId param schema (for addresses) */
 export const userIdParamSchema = z.object({
-  userId: z.coerce.number().int().positive("User ID must be a positive number"),
+  userId: z.coerce.number().int().positive({ message: "User ID must be a positive number" }),
 });
+
 export const addressIdParamSchema = z.object({
-  addressId: z.coerce.number().int().positive("Address ID must be a positive number"),
+  addressId: z.coerce.number().int().positive({ message: "Address ID must be a positive number" }),
 });

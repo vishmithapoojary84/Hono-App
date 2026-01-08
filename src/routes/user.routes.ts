@@ -3,17 +3,116 @@ import bcrypt from "bcrypt";
 import { pool } from "../db.js";
 import { createUserSchema, idParamSchema } from "../validators/user.schema.js";
 import addressApp from "./address.routes.js";
+import { createUserWithAddressesSchema } from "../validators/transaction.schema.js";
 const userApp = new Hono();
 userApp.route("/:userId/addresses", addressApp);
-/** GET /users */
+
 userApp.get("/", async (c) => {
   const result = await pool.query(
     "SELECT id, name, email, created_at FROM users"
   );
   return c.json(result.rows);
 });
+userApp.post("/with-addresses", async (c) => {
+  const client = await pool.connect();
 
-/** POST /users */
+  try {
+    
+    const body = await c.req.json();
+    const parsed = createUserWithAddressesSchema.safeParse(body);
+  if (!parsed.success) {
+  return c.json(
+    {
+      errors: parsed.error.issues.map((issue) => issue.message),
+    },
+    400
+  );
+}
+
+
+    const { user, addresses } = parsed.data;
+
+   
+    await client.query("BEGIN");
+
+    
+    const hashedPassword = await bcrypt.hash(user.password, 10);
+
+    
+    const userResult = await client.query(
+      `INSERT INTO users (name, email, password)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, email`,
+      [user.name, user.email, hashedPassword]
+    );
+
+    const userId = userResult.rows[0].id;
+
+ 
+    const insertedAddresses = [];
+    for (const addr of addresses) {
+      const addressResult = await client.query(
+        `INSERT INTO addresses (user_id, address_line, city, state, postal_code, country)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING address_line, city, state, postal_code, country`,
+        [
+          userId,
+          addr.address_line,
+          addr.city,
+          addr.state,
+          addr.postal_code,
+          addr.country,
+        ]
+      );
+      insertedAddresses.push(addressResult.rows[0]);
+    }
+
+  
+    await client.query("COMMIT");
+
+    return c.json(
+      {
+        user: userResult.rows[0],
+        addresses: insertedAddresses,
+      },
+      201
+    );
+
+  } catch (err) {
+   
+    await client.query("ROLLBACK");
+    console.error("Transaction failed:", err);
+
+    return c.json({ error: "Transaction failed, rolled back" }, 500);
+  } finally {
+  
+    client.release();
+  }
+});
+
+userApp.get("/no-address", async (c) => {
+  const result = await pool.query(`
+    SELECT u.id, u.name, u.email
+    FROM users u
+    LEFT JOIN addresses a ON u.id = a.user_id
+    WHERE a.id IS NULL
+    ORDER BY u.name;
+  `);
+  return c.json(result.rows);
+});
+
+
+userApp.get("/address-count", async (c) => {
+  const result = await pool.query(`
+    SELECT u.id, u.name, COUNT(a.id) AS address_count
+    FROM users u
+    LEFT JOIN addresses a ON u.id = a.user_id
+    GROUP BY u.id, u.name
+    ORDER BY u.name;
+  `);
+  return c.json(result.rows);
+});
+
 userApp.post("/", async (c) => {
   const body = await c.req.json();
   const parsed = createUserSchema.safeParse(body);
@@ -38,7 +137,6 @@ userApp.post("/", async (c) => {
   return c.json(result.rows[0], 201);
 });
 
-/** GET /users/:id */
 userApp.get("/:id", async (c) => {
   const parsed = idParamSchema.safeParse(c.req.param());
 
@@ -60,7 +158,6 @@ userApp.get("/:id", async (c) => {
   return c.json(result.rows[0]);
 });
 
-/** PUT /users/:id */
 userApp.put("/:id", async (c) => {
   const paramParsed = idParamSchema.safeParse(c.req.param());
   if (!paramParsed.success) {
@@ -97,7 +194,7 @@ userApp.put("/:id", async (c) => {
   return c.json(result.rows[0]);
 });
 
-/** DELETE /users/:id */
+
 userApp.delete("/:id", async (c) => {
   const parsed = idParamSchema.safeParse(c.req.param());
 
@@ -118,5 +215,7 @@ userApp.delete("/:id", async (c) => {
 
   return c.json({ message: "User deleted successfully" });
 });
+
+
 
 export default userApp;

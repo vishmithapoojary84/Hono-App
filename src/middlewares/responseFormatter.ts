@@ -22,7 +22,6 @@ export const responseFormatter = async (c: Context, next: Next) => {
     message: success ? "Operation successful" : "An error occurred",
   };
 
-  // ✅ Replace the response instead of returning a new one
   c.res = new Response(JSON.stringify(formattedResponse), {
     status: res.status as StatusCode,
     headers: {
