@@ -73,7 +73,7 @@ addressApp.get("/", async (c) => {
 });
 
 
-addressApp.put("/:addressId", async (c) => {
+addressApp.patch("/:addressId", async (c) => {
   try {
     const { userId, addressId } = {
       userId: Number(c.req.param("userId")),

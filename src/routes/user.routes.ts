@@ -17,28 +17,23 @@ userApp.post("/with-addresses", async (c) => {
   const client = await pool.connect();
 
   try {
-    
     const body = await c.req.json();
     const parsed = createUserWithAddressesSchema.safeParse(body);
-  if (!parsed.success) {
-  return c.json(
-    {
-      errors: parsed.error.issues.map((issue) => issue.message),
-    },
-    400
-  );
-}
-
+    if (!parsed.success) {
+      return c.json(
+        {
+          errors: parsed.error.issues.map((issue) => issue.message),
+        },
+        400
+      );
+    }
 
     const { user, addresses } = parsed.data;
 
-   
     await client.query("BEGIN");
 
-    
     const hashedPassword = await bcrypt.hash(user.password, 10);
 
-    
     const userResult = await client.query(
       `INSERT INTO users (name, email, password)
        VALUES ($1, $2, $3)
@@ -48,26 +43,33 @@ userApp.post("/with-addresses", async (c) => {
 
     const userId = userResult.rows[0].id;
 
- 
-    const insertedAddresses = [];
-    for (const addr of addresses) {
-      const addressResult = await client.query(
-        `INSERT INTO addresses (user_id, address_line, city, state, postal_code, country)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING address_line, city, state, postal_code, country`,
-        [
+    // Prepare values array and placeholders string for multi-row insert
+    const values: (string | number)[] = [];
+    const placeholders = addresses
+      .map((addr, i) => {
+        const baseIndex = i * 6;
+        values.push(
           userId,
           addr.address_line,
           addr.city,
           addr.state,
           addr.postal_code,
-          addr.country,
-        ]
-      );
-      insertedAddresses.push(addressResult.rows[0]);
-    }
+          addr.country
+        );
+        return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
+      })
+      .join(", ");
+      console.log("Address Insert Placeholders:", placeholders);
 
-  
+    const addressInsertQuery = `
+      INSERT INTO addresses (user_id, address_line, city, state, postal_code, country)
+      VALUES ${placeholders}
+      RETURNING address_line, city, state, postal_code, country;
+    `;
+
+    const addressResult = await client.query(addressInsertQuery, values);
+    const insertedAddresses = addressResult.rows;
+
     await client.query("COMMIT");
 
     return c.json(
@@ -78,17 +80,42 @@ userApp.post("/with-addresses", async (c) => {
       201
     );
 
-  } catch (err) {
-   
-    await client.query("ROLLBACK");
-    console.error("Transaction failed:", err);
+ } catch (err: unknown) {
+  await client.query("ROLLBACK");
+  console.error("Transaction failed:", err);
 
-    return c.json({ error: "Transaction failed, rolled back" }, 500);
-  } finally {
   
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    typeof (err as any).code === "string"
+  ) {
+    const code = (err as any).code;
+
+    if (code === "23505") {
+      return c.json(
+        { error: "Duplicate entry: This email already exists." },
+        409
+      );
+    }
+
+    if (code === "23503") {
+      return c.json(
+        { error: "Foreign key violation: Invalid reference." },
+        400
+      );
+    }
+  }
+
+  // fallback generic error
+  return c.json({ error: "Transaction failed, rolled back" }, 500);
+}
+ finally {
     client.release();
   }
 });
+
 
 userApp.get("/no-address", async (c) => {
   const result = await pool.query(`
