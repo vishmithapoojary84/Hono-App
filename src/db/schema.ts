@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, varchar, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, timestamp,index} from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),                    
@@ -17,4 +18,26 @@ export const addresses = pgTable("addresses", {
   postalCode: varchar("postal_code", { length: 20 }).notNull(),
   country: varchar("country", { length: 100 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (table) => [
+  index("idx_addresses_user_id").on(table.userId)
+]);
+
+
+
+export const usersRelations = relations(users, ({ many }) => ({
+  addresses: many(addresses),
+}));
+
+export const addressesRelations = relations(addresses, ({ one }) => ({
+  user: one(users, {
+    fields: [addresses.userId],
+    references: [users.id],
+  }),
+}));
+
+
+
+export type AddressInsert = typeof addresses.$inferInsert;
+
+

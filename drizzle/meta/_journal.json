@@ -8,6 +8,13 @@
       "when": 1768199837848,
       "tag": "0000_equal_clea",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768301518631,
+      "tag": "0001_tearful_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

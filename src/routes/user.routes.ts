@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import bcrypt from "bcrypt";
 import { db } from "../db.js";
-import { users,addresses } from "../db/schema.js"; 
-import { eq ,isNull} from "drizzle-orm"; 
+import { users,addresses ,usersRelations,addressesRelations} from "../db/schema.js"; 
+import type { AddressInsert } from "../db/schema.js";
+import { eq ,isNull,sql} from "drizzle-orm"; 
 import { createUserSchema, idParamSchema } from "../validators/user.schema.js";
 import addressApp from "./address.routes.js";
 import { createUserWithAddressesSchema } from "../validators/transaction.schema.js";
@@ -19,108 +20,91 @@ userApp.get("/", async (c) => {
   }
 });
 
-// userApp.post("/with-addresses", async (c) => {
-//   const client = await pool.connect();
 
-//   try {
-//     const body = await c.req.json();
-//     const parsed = createUserWithAddressesSchema.safeParse(body);
-//     if (!parsed.success) {
-//       return c.json(
-//         {
-//           errors: parsed.error.issues.map((issue) => issue.message),
-//         },
-//         400
-//       );
-//     }
 
-//     const { user, addresses } = parsed.data;
+userApp.post("/with-addresses", async (c) => {
+  try {
+    const body = await c.req.json();
+    const parsed = createUserWithAddressesSchema.safeParse(body);
 
-//     await client.query("BEGIN");
+    if (!parsed.success) {
+      return c.json(
+        { errors: parsed.error.issues.map((issue) => issue.message) },
+        400
+      );
+    }
 
-//     const hashedPassword = await bcrypt.hash(user.password, 10);
+    const { user, addresses: addressesToInsert } = parsed.data;
 
-//     const userResult = await client.query(
-//       `INSERT INTO users (name, email, password)
-//        VALUES ($1, $2, $3)
-//        RETURNING id, name, email`,
-//       [user.name, user.email, hashedPassword]
-//     );
+ 
+    const hashedPassword = await bcrypt.hash(user.password, 10);
 
-//     const userId = userResult.rows[0].id;
+    const result = await db.transaction(async (tx) => {
 
-//     // Prepare values array and placeholders string for multi-row insert
-//     const values: (string | number)[] = [];
-//     const placeholders = addresses
-//       .map((addr, i) => {
-//         const baseIndex = i * 6;
-//         values.push(
-//           userId,
-//           addr.address_line,
-//           addr.city,
-//           addr.state,
-//           addr.postal_code,
-//           addr.country
-//         );
-//         return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
-//       })
-//       .join(", ");
-//       console.log("Address Insert Placeholders:", placeholders);
+      const [insertedUser] = await tx
+        .insert(users)
+        .values({
+          name: user.name,
+          email: user.email,
+          password: hashedPassword,
+        })
+        .returning({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+        });
 
-//     const addressInsertQuery = `
-//       INSERT INTO addresses (user_id, address_line, city, state, postal_code, country)
-//       VALUES ${placeholders}
-//       RETURNING address_line, city, state, postal_code, country;
-//     `;
+      
+      const addressesWithUserId :AddressInsert[]= addressesToInsert.map((addr) => ({
+        userId: insertedUser.id,
+        addressLine: addr.address_line,
+        city: addr.city,
+        state: addr.state,
+        postalCode: addr.postal_code,
+        country: addr.country,
+      }));
 
-//     const addressResult = await client.query(addressInsertQuery, values);
-//     const insertedAddresses = addressResult.rows;
+      await tx.insert(addresses).values(addressesWithUserId);
 
-//     await client.query("COMMIT");
+        const userWithAddresses = await tx.query.users.findFirst({
+        where: eq(users.id, insertedUser.id),
+        with: {
+          addresses: true,
+        },
+      });
 
-//     return c.json(
-//       {
-//         user: userResult.rows[0],
-//         addresses: insertedAddresses,
-//       },
-//       201
-//     );
+      return userWithAddresses!;
 
-//  } catch (err: unknown) {
-//   await client.query("ROLLBACK");
-//   console.error("Transaction failed:", err);
+    });
 
-  
-//   if (
-//     typeof err === "object" &&
-//     err !== null &&
-//     "code" in err &&
-//     typeof (err as any).code === "string"
-//   ) {
-//     const code = (err as any).code;
+    return c.json(result, 201);
+  } catch (err: unknown) {
+    
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      typeof (err as any).code === "string"
+    ) {
+      const code = (err as any).code;
 
-//     if (code === "23505") {
-//       return c.json(
-//         { error: "Duplicate entry: This email already exists." },
-//         409
-//       );
-//     }
+      if (code === "23505") {
+        return c.json({ error: "Duplicate entry: This email already exists." }, 409);
+      }
 
-//     if (code === "23503") {
-//       return c.json(
-//         { error: "Foreign key violation: Invalid reference." },
-//         400
-//       );
-//     }
-//   }
+      if (code === "23503") {
+        return c.json({ error: "Foreign key violation: Invalid reference." }, 400);
+      }
+    }
 
-//   // fallback generic error
-//   return c.json({ error: "Transaction failed, rolled back" }, 500);
-// }
-//  finally {
-//     client.release();
-//   }
-// });
+    console.error("Transaction failed:", err);
+    return c.json({ error: "Transaction failed, rolled back" }, 500);
+  }
+});
+
+
+
+
 
 
 
@@ -150,16 +134,24 @@ userApp.get("/no-address", async (c) => {
 
 
 
-// userApp.get("/address-count", async (c) => {
-//   const result = await pool.query(`
-//     SELECT u.id, u.name, COUNT(a.id) AS address_count
-//     FROM users u
-//     LEFT JOIN addresses a ON u.id = a.user_id
-//     GROUP BY u.id, u.name
-//     ORDER BY u.name;
-//   `);
-//   return c.json(result.rows);
-// });
+
+userApp.get("/address-count", async (c) => {
+  const result = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      addressCount: sql<number>`COUNT(${addresses.id})` ,
+    })
+    .from(users)
+    .leftJoin(
+      addresses,
+      eq(users.id, addresses.userId)
+    )
+    .groupBy(users.id, users.name)
+    .orderBy(users.name);
+
+  return c.json(result);
+});
 
 
 
